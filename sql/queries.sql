@@ -1,49 +1,71 @@
 -- queries.sql
 USE scdr;
 
--- 1) Monthly aggregation from event-level (if your raw has loss amounts per event; if not, skip)
--- (Only if your event-level file has a numeric loss column named 'loss_usd')
+-- Sanity checks
+SELECT COUNT(*) AS total_events FROM storm_crimes;
+SELECT MIN(event_date) AS min_date, MAX(event_date) AS max_date FROM storm_crimes;
+
+-- Create a view that flags storm vs no-storm (storm_activity non-empty => Storm)
+DROP VIEW IF EXISTS v_events_with_flag;
+CREATE VIEW v_events_with_flag AS
 SELECT
-  DATE_FORMAT(event_date, '%Y-%m-01') AS period_date,
-  CASE WHEN storm_activity IS NULL OR storm_activity = '' THEN 'No Storm' ELSE 'Storm' END AS storm_flag,
-  SUM(loss_usd) AS month_loss
-INTO OUTFILE '/tmp/monthly_loss_from_events.csv'
-FIELDS TERMINATED BY ','
-OPTIONALLY ENCLOSED BY '"'
-LINES TERMINATED BY '\n'
+  id,
+  event_date,
+  crime_activity,
+  storm_activity,
+  CASE WHEN TRIM(IFNULL(storm_activity,'')) = '' THEN 'No Storm' ELSE 'Storm' END AS storm_flag,
+  city, zone
+FROM storm_crimes;
+
+-- Monthly aggregation (counts) from the event-level data
+DROP TABLE IF EXISTS monthly_event_counts_temp;
+CREATE TABLE monthly_event_counts_temp AS
+SELECT
+  STR_TO_DATE(DATE_FORMAT(event_date, '%Y-%m-01'), '%Y-%m-%d') AS period_date,
+  CASE WHEN TRIM(IFNULL(storm_activity,'')) = '' THEN 'No Storm' ELSE 'Storm' END AS storm_flag,
+  COUNT(*) AS event_count
 FROM storm_crimes
-WHERE event_date BETWEEN '2017-01-01' AND '2019-12-31'
 GROUP BY period_date, storm_flag
 ORDER BY period_date, storm_flag;
 
--- 2) If you loaded monthly_losses, export aggregated rows with cumulative sums:
-SELECT
+-- Copy aggregated temp into the canonical monthly_event_counts table (insert or replace)
+REPLACE INTO monthly_event_counts (period_date, storm_flag, event_count, source)
+SELECT period_date, storm_flag, event_count, 'derived_from_events' FROM monthly_event_counts_temp;
+
+-- Cumulative counts by storm_flag (ordered by date)
+SELECT 
   period_date,
   storm_flag,
-  loss_usd,
-  SUM(loss_usd) OVER (PARTITION BY storm_flag ORDER BY period_date) AS cum_loss_usd
-FROM monthly_losses
-ORDER BY period_date, storm_flag;
+  event_count,
+  @cum := IF(@prev_flag = storm_flag, @cum + event_count, event_count) AS cum_event_count,
+  @prev_flag := storm_flag
+FROM (
+  SELECT period_date, storm_flag, event_count
+  FROM monthly_event_counts
+  ORDER BY storm_flag, period_date
+) AS t
+CROSS JOIN (SELECT @cum := 0, @prev_flag := '') vars;
 
--- 3) Aggregate monthly CSV for R (two-row-per-month structure)
-SELECT period_date,
-       SUM(CASE WHEN storm_flag = 'Storm' THEN loss_usd ELSE 0 END) AS storm_loss,
-       SUM(CASE WHEN storm_flag = 'No Storm' THEN loss_usd ELSE 0 END) AS nostorm_loss
-FROM monthly_losses
-GROUP BY period_date
-ORDER BY period_date;
-
--- 4) Top crime types during Storm events
+-- Top crime activities during storms
 SELECT crime_activity, COUNT(*) AS n_events
 FROM storm_crimes
-WHERE storm_activity IS NOT NULL AND storm_activity <> ''
+WHERE TRIM(IFNULL(storm_activity,'')) <> ''
 GROUP BY crime_activity
 ORDER BY n_events DESC
-LIMIT 20;
+LIMIT 25;
 
--- 5) Counts by City and StormActivity
-SELECT city, storm_activity, COUNT(*) AS n_events
+-- Counts by city and storm type
+SELECT city, CASE WHEN TRIM(IFNULL(storm_activity,'')) = '' THEN 'No Storm' ELSE 'Storm' END AS storm_flag, COUNT(*) AS n_events
 FROM storm_crimes
-GROUP BY city, storm_activity
-ORDER BY city, n_events DESC;
+GROUP BY city, storm_flag
+ORDER BY city, n_events DESC
+LIMIT 200;
 
+-- Optional: export monthly_event_counts to CSV (server must allow INTO OUTFILE)
+SELECT period_date, storm_flag, event_count
+INTO OUTFILE '/var/lib/mysql-files/monthly_event_counts.csv'
+FIELDS TERMINATED BY ','
+ENCLOSED BY '"'
+LINES TERMINATED BY '\n'
+FROM monthly_event_counts
+ORDER BY period_date, storm_flag;
