@@ -1,7 +1,6 @@
 -- load_data.sql
 USE scdr;
 
--- 1) Load event-level CSV (StormCrimes_TrulyCleaned.csv)
 LOAD DATA LOCAL INFILE 'data/StormCrimes_TrulyCleaned.csv'
 INTO TABLE storm_crimes
 CHARACTER SET utf8mb4
@@ -21,7 +20,7 @@ SET
   zone = NULLIF(@Zone, ''),
   city = NULLIF(@City, '');
 
--- 2) Load Module6 CSV (you must export the .xlsx to CSV first, e.g., module_six_crimes.csv)
+-- Export module six sheet to CSV first (module_six_crimes.csv), then:
 LOAD DATA LOCAL INFILE 'data/module_six_crimes.csv'
 INTO TABLE module_six_crimes
 CHARACTER SET utf8mb4
