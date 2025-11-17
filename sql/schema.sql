@@ -2,9 +2,9 @@
 CREATE DATABASE IF NOT EXISTS scdr CHARACTER SET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
 USE scdr;
 
--- Event-level table (match StormCrimesRaw.csv / StormCrimes_TrulyCleaned.csv)
+-- Event-level table for StormCrimes_TrulyCleaned.csv
 CREATE TABLE IF NOT EXISTS storm_crimes (
-  id BIGINT NOT NULL,
+  id INT UNSIGNED NOT NULL,
   event_date DATE NOT NULL,
   crime_event_id BIGINT NULL,
   crime_activity VARCHAR(255) NULL,
@@ -17,19 +17,29 @@ CREATE TABLE IF NOT EXISTS storm_crimes (
   INDEX idx_event_date (event_date),
   INDEX idx_storm_activity (storm_activity(60)),
   INDEX idx_crime_activity (crime_activity(60)),
-  INDEX idx_city (city)
+  INDEX idx_city_zone (city, zone_city_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- Optional cleaned event table (if you want to store preprocessed/normalized rows)
-CREATE TABLE IF NOT EXISTS storm_crimes_cleaned LIKE storm_crimes;
+-- Module Six dataset (converted from DAT 375 Module Six Assignment Data Set COMPLETE.xlsx)
+CREATE TABLE IF NOT EXISTS module_six_crimes (
+  row_id INT AUTO_INCREMENT PRIMARY KEY,
+  event_id VARCHAR(64),
+  crime_type VARCHAR(255),
+  crime_code INT,
+  city VARCHAR(120),
+  city_code INT,
+  date_of_crime DATE,
+  INDEX idx_module6_date (date_of_crime),
+  INDEX idx_module6_city (city)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- Monthly aggregated losses table (for crimestormQ/crimenostormQ or derived aggregates)
-CREATE TABLE IF NOT EXISTS monthly_losses (
+-- Monthly event counts (derived/aggregated table)
+CREATE TABLE IF NOT EXISTS monthly_event_counts (
   id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-  period_date DATE NOT NULL,                 -- first-of-month, e.g. 2017-01-01
-  loss_usd DECIMAL(12,2) NOT NULL,
+  period_date DATE NOT NULL,                    -- e.g. 2017-01-01
   storm_flag ENUM('Storm','No Storm') NOT NULL,
-  source_file VARCHAR(64) NULL,
+  event_count INT NOT NULL,
+  source VARCHAR(64) NULL,
   UNIQUE KEY ux_period_flag (period_date, storm_flag),
   INDEX idx_period (period_date),
   INDEX idx_storm_flag (storm_flag)
