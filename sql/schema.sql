@@ -2,7 +2,6 @@
 CREATE DATABASE IF NOT EXISTS scdr CHARACTER SET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
 USE scdr;
 
--- Event-level table for StormCrimes_TrulyCleaned.csv
 CREATE TABLE IF NOT EXISTS storm_crimes (
   id INT UNSIGNED NOT NULL,
   event_date DATE NOT NULL,
@@ -16,11 +15,9 @@ CREATE TABLE IF NOT EXISTS storm_crimes (
   PRIMARY KEY (id),
   INDEX idx_event_date (event_date),
   INDEX idx_storm_activity (storm_activity(60)),
-  INDEX idx_crime_activity (crime_activity(60)),
-  INDEX idx_city_zone (city, zone_city_id)
+  INDEX idx_crime_activity (crime_activity(60))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- Module Six dataset (converted from DAT 375 Module Six Assignment Data Set COMPLETE.xlsx)
 CREATE TABLE IF NOT EXISTS module_six_crimes (
   row_id INT AUTO_INCREMENT PRIMARY KEY,
   event_id VARCHAR(64),
@@ -33,14 +30,12 @@ CREATE TABLE IF NOT EXISTS module_six_crimes (
   INDEX idx_module6_city (city)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- Monthly event counts (derived/aggregated table)
-CREATE TABLE IF NOT EXISTS monthly_event_counts (
+CREATE TABLE IF NOT EXISTS monthly_crime_counts (
   id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-  period_date DATE NOT NULL,                    -- e.g. 2017-01-01
+  period_date DATE NOT NULL,
   storm_flag ENUM('Storm','No Storm') NOT NULL,
   event_count INT NOT NULL,
   source VARCHAR(64) NULL,
   UNIQUE KEY ux_period_flag (period_date, storm_flag),
-  INDEX idx_period (period_date),
-  INDEX idx_storm_flag (storm_flag)
+  INDEX idx_period (period_date)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
