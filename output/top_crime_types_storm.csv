@@ -1,0 +1,9 @@
+crime_activity,storm_flag,n_events
+Violent Crime,Storm,26
+Burglary,Storm,25
+Murder and Non-negligent manslaughter,Storm,22
+Property Crime,Storm,22
+Larcency- Theft,Storm,21
+Motor Vehicle - Theft,Storm,18
+Aggravated Assault,Storm,17
+Robbery,Storm,16
