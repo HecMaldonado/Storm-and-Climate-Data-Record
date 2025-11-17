@@ -1,64 +1,122 @@
 # src/analyze_types.R
+# Updated to read:
+#  - data/StormCrimes_TrulyCleaned.csv
+#  - data/DAT 375 Module Six Assignment Data Set*.xlsx  (auto-detects file starting with "DAT 375 Module Six")
+# Produces CSVs and PNGs in output/ and copies PNGs to docs/figures/
+
 suppressPackageStartupMessages({
   library(readr)
+  library(readxl)
   library(dplyr)
   library(lubridate)
   library(ggplot2)
   library(tidyr)
+  library(viridis)
 })
 
 # Paths
 storm_csv <- file.path("data", "StormCrimes_TrulyCleaned.csv")
-module6_csv <- file.path("data", "module_six_crimes.csv")  # optional - export Excel to CSV first
+
+# Auto-detect Module Six Excel file (supports variants like "... COMPLETE.xlsx")
+module6_files <- list.files("data", pattern = "^DAT 375 Module Six", full.names = TRUE)
+module6_xlsx <- if (length(module6_files) >= 1) module6_files[1] else NA
+module6_sheet_name <- "Crime data 2019"  # expected sheet; fallback to first sheet
+
 out_dir <- "output"
+fig_dir <- file.path("docs", "figures")
 dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
+dir.create(fig_dir, showWarnings = FALSE, recursive = TRUE)
 
-# Read storm events file
-df <- read_csv(storm_csv, show_col_types = FALSE)
-# Normalize column names
-names(df) <- make.names(names(df), unique = TRUE)
-
-# Parse date (CSV uses m/d/Y)
-if ("Date" %in% names(df)) {
-  df <- df %>% mutate(event_date = as.Date(Date, format = "%m/%d/%Y"))
-} else {
-  stop("Date column not found in StormCrimes_TrulyCleaned.csv")
+# Helper: normalize column names to simple lower_snake
+norm_names <- function(df) {
+  names(df) <- names(df) %>%
+    gsub("\\s+", "_", .) %>%
+    gsub("[^A-Za-z0-9_]", "", .) %>%
+    tolower()
+  df
 }
-stopifnot(!any(is.na(df$event_date)))
 
-# Standardize fields
-df <- df %>% mutate(
-  crime_activity = as.character(CrimeActivity),
-  storm_activity = as.character(StormActivity),
-  storm_flag = ifelse(trimws(coalesce(storm_activity, "")) == "", "No Storm", "Storm")
-)
+# ---------- Read StormCrimes_TrulyCleaned.csv ----------
+if (!file.exists(storm_csv)) stop("Missing file: data/StormCrimes_TrulyCleaned.csv")
+storm <- read_csv(storm_csv, show_col_types = FALSE)
+storm <- norm_names(storm)
 
-# 1) Crime type counts by storm_flag
-crime_type_by_storm <- df %>%
-  group_by(crime_activity, storm_flag) %>%
-  summarise(n_events = n(), .groups = "drop") %>%
-  arrange(storm_flag, desc(n_events))
+# Ensure date column exists and parse (Storm file uses MM/DD/YYYY)
+if ("date" %in% names(storm)) {
+  storm <- storm %>% mutate(event_date = as.Date(date, format = "%m/%d/%Y"))
+} else {
+  stop("Storm file missing 'Date' column (expected column name 'Date').")
+}
+if (any(is.na(storm$event_date))) {
+  # try alternative parsing
+  storm <- storm %>% mutate(event_date = parse_date_time(date, orders = c("mdy","ymd","Y-m-d")))
+  storm$event_date <- as.Date(storm$event_date)
+}
 
-write_csv(crime_type_by_storm, file.path(out_dir, "crime_type_counts_by_storm.csv"))
+# Normalize crime_activity and storm_activity fields
+if ("crimeactivity" %in% names(storm)) storm$crime_activity <- as.character(storm$crimeactivity)
+if ("crime_activity" %in% names(storm)) storm$crime_activity <- as.character(storm$crime_activity)
+if ("stormactivity" %in% names(storm)) storm$storm_activity <- as.character(storm$stormactivity)
+if ("storm_activity" %in% names(storm)) storm$storm_activity <- as.character(storm$storm_activity)
 
-# 2) Top 20 crimes during Storm periods (CSV + bar chart)
-top_storm_crimes <- crime_type_by_storm %>%
-  filter(storm_flag == "Storm") %>%
-  arrange(desc(n_events)) %>%
-  slice_head(n = 20)
+storm <- storm %>%
+  mutate(
+    crime_activity = ifelse(is.na(crime_activity), "", crime_activity),
+    storm_activity = ifelse(is.na(storm_activity), "", storm_activity),
+    storm_flag = ifelse(trimws(coalesce(storm_activity, "")) == "", "No Storm", "Storm")
+  )
 
-write_csv(top_storm_crimes, file.path(out_dir, "top_crime_types_storm.csv"))
+# ---------- Read Module Six Excel (if present) ----------
+module6 <- NULL
+if (!is.na(module6_xlsx) && file.exists(module6_xlsx)) {
+  # choose sheet: try named sheet first, then fallback to first sheet
+  sheets <- excel_sheets(module6_xlsx)
+  sheet_to_read <- if (module6_sheet_name %in% sheets) module6_sheet_name else sheets[1]
+  module6 <- read_xlsx(module6_xlsx, sheet = sheet_to_read)
+  module6 <- as.data.frame(module6)
+  module6 <- norm_names(module6)
+  # map crime type column
+  if ("crime_type" %in% names(module6)) {
+    module6$crime_activity <- as.character(module6$crime_type)
+  } else if ("crime" %in% names(module6)) {
+    module6$crime_activity <- as.character(module6$crime)
+  } else {
+    # try other likely names
+    possible <- intersect(c("crime_type","crime_type_1","crime_type_2019","crime"), names(module6))
+    if (length(possible)) module6$crime_activity <- as.character(module6[[possible[1]]]) else module6$crime_activity <- ""
+  }
+  # parse module dates (Date of crime or similar). handle Excel serials
+  date_col <- intersect(c("date_of_crime","date","dateofcrime","date_of_crime_1"), names(module6))
+  if (length(date_col) >= 1) {
+    dcol <- date_col[1]
+    # attempt standard date parse
+    parsed <- suppressWarnings(as.Date(module6[[dcol]]))
+    if (all(is.na(parsed))) {
+      # try numeric Excel serial origin
+      numeric_vals <- suppressWarnings(as.numeric(module6[[dcol]]))
+      if (any(!is.na(numeric_vals))) {
+        parsed2 <- as.Date(numeric_vals, origin = "1899-12-30")
+        module6$event_date <- parsed2
+      } else {
+        module6$event_date <- NA
+      }
+    } else {
+      module6$event_date <- parsed
+    }
+  } else {
+    module6$event_date <- NA
+  }
+  # ensure crime_activity exists
+  module6$crime_activity <- ifelse(is.na(module6$crime_activity), "", module6$crime_activity)
+} else {
+  message("Module Six Excel not found in data/ (file starting with 'DAT 375 Module Six'). Proceeding without it.")
+}
 
-p1 <- ggplot(top_storm_crimes, aes(x = reorder(crime_activity, n_events), y = n_events)) +
-  geom_col(fill = "#17BECF") +
-  coord_flip() +
-  labs(title = "Top Crime Types During Storm Events", x = "Crime Type", y = "Event Count") +
-  theme_minimal(base_size = 12)
-ggsave(filename = file.path(out_dir, "top_crime_types_storm.png"), plot = p1, width = 10, height = 6, dpi = 150)
+# ---------- ANALYSES ----------
 
-# 3) Monthly event counts and cumulative counts by Storm/No Storm
-monthly_counts <- df %>%
-  mutate(period_date = floor_date(event_date, unit = "month")) %>%
+# 1) combined_monthly_event_counts.csv (from storm file)
+monthly_counts <- storm %>%
+  mutate(period_date = floor_date(event_date, "month")) %>%
   group_by(period_date, storm_flag) %>%
   summarise(event_count = n(), .groups = "drop") %>%
   arrange(storm_flag, period_date) %>%
@@ -68,32 +126,74 @@ monthly_counts <- df %>%
 
 write_csv(monthly_counts, file.path(out_dir, "combined_monthly_event_counts.csv"))
 
-p2 <- ggplot(monthly_counts, aes(x = period_date, y = cum_event_count, color = storm_flag)) +
-  geom_line(size = 1.1) +
+# 2) cumulative_event_counts.png
+p_cum <- ggplot(monthly_counts, aes(x = period_date, y = cum_event_count, color = storm_flag)) +
+  geom_line(size = 1.2, na.rm = TRUE) +
   scale_color_manual(values = c("Storm" = "#17BECF", "No Storm" = "#FF6B6B")) +
   labs(title = "Cumulative Crime Events by Storm Status",
-       subtitle = "Counts (derived from StormCrimes_TrulyCleaned.csv)",
+       subtitle = "Derived from StormCrimes_TrulyCleaned.csv",
        x = "Month", y = "Cumulative Event Count", color = "Storm Status") +
   theme_minimal(base_size = 12)
 
-ggsave(filename = file.path(out_dir, "cumulative_event_counts.png"), plot = p2, width = 10, height = 6, dpi = 150)
+ggsave(file.path(out_dir, "cumulative_event_counts.png"), plot = p_cum, width = 10, height = 6, dpi = 150)
+ggsave(file.path(fig_dir, "cumulative_event_counts.png"), plot = p_cum, width = 10, height = 6, dpi = 150)
 
-# 4) Optional: monthly heatmap of top crime types across months
-top_overall <- df %>% count(crime_activity, sort = TRUE) %>% slice_head(n = 10) %>% pull(crime_activity)
-heat <- df %>%
-  filter(crime_activity %in% top_overall) %>%
-  mutate(period_date = floor_date(event_date, unit = "month")) %>%
+# 3) crime_type_counts_by_storm.csv
+crime_type_by_storm <- storm %>%
+  group_by(crime_activity, storm_flag) %>%
+  summarise(n_events = n(), .groups = "drop") %>%
+  arrange(storm_flag, desc(n_events))
+
+write_csv(crime_type_by_storm, file.path(out_dir, "crime_type_counts_by_storm.csv"))
+
+# 4) top_crime_types_storm.png & CSV
+top_storm_crimes <- crime_type_by_storm %>%
+  filter(storm_flag == "Storm") %>%
+  arrange(desc(n_events)) %>%
+  slice_head(n = 20)
+
+write_csv(top_storm_crimes, file.path(out_dir, "top_crime_types_storm.csv"))
+
+p_top <- ggplot(top_storm_crimes, aes(x = reorder(crime_activity, n_events), y = n_events)) +
+  geom_col(fill = "#17BECF") +
+  coord_flip() +
+  labs(title = "Top Crime Types During Storm Events", x = "Crime Type", y = "Event Count") +
+  theme_minimal(base_size = 12)
+
+ggsave(file.path(out_dir, "top_crime_types_storm.png"), plot = p_top, width = 10, height = 6, dpi = 150)
+ggsave(file.path(fig_dir, "top_crime_types_storm.png"), plot = p_top, width = 10, height = 6, dpi = 150)
+
+# 5) monthly_top10_crimetypes_heatmap.png (uses combined data if module6 present, else storm only)
+if (!is.null(module6)) {
+  combined_for_top <- bind_rows(
+    storm %>% select(event_date, crime_activity),
+    module6 %>% select(event_date, crime_activity)
+  )
+} else {
+  combined_for_top <- storm %>% select(event_date, crime_activity)
+}
+
+top10 <- combined_for_top %>%
+  filter(!is.na(crime_activity) & crime_activity != "") %>%
+  count(crime_activity, sort = TRUE) %>% slice_head(n = 10) %>% pull(crime_activity)
+
+heat <- combined_for_top %>%
+  filter(crime_activity %in% top10) %>%
+  mutate(period_date = floor_date(event_date, "month")) %>%
   count(period_date, crime_activity) %>%
-  complete(period_date = seq(min(period_date), max(period_date), by = "month"),
-           crime_activity = top_overall,
+  complete(period_date = seq(min(period_date, na.rm = TRUE), max(period_date, na.rm = TRUE), by = "month"),
+           crime_activity = top10,
            fill = list(n = 0))
 
-p3 <- ggplot(heat, aes(x = period_date, y = crime_activity, fill = n)) +
+write_csv(heat %>% arrange(period_date, crime_activity), file.path(out_dir, "monthly_top10_crimetypes_heatmap_data.csv"))
+
+p_heat <- ggplot(heat, aes(x = period_date, y = crime_activity, fill = n)) +
   geom_tile() +
   scale_fill_viridis_c(option = "magma") +
   labs(title = "Monthly Counts for Top 10 Crime Types", x = "Month", y = "Crime Type", fill = "Count") +
   theme_minimal(base_size = 10)
 
-ggsave(filename = file.path(out_dir, "monthly_top10_crimetypes_heatmap.png"), plot = p3, width = 12, height = 6, dpi = 150)
+ggsave(file.path(out_dir, "monthly_top10_crimetypes_heatmap.png"), plot = p_heat, width = 12, height = 6, dpi = 150)
+ggsave(file.path(fig_dir, "monthly_top10_crimetypes_heatmap.png"), plot = p_heat, width = 12, height = 6, dpi = 150)
 
-message("Outputs written to: ", out_dir)
+message("Outputs written to: ", normalizePath(out_dir), " and figures copied to: ", normalizePath(fig_dir))
