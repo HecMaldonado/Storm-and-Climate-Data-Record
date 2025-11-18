@@ -1,4 +1,4 @@
--- schema.sql
+-- sql/schema.sql
 CREATE DATABASE IF NOT EXISTS scdr CHARACTER SET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
 USE scdr;
 
