@@ -1,10 +1,11 @@
--- queries.sql
+-- sql/queries.sql
 USE scdr;
 
 -- Sanity checks
-SELECT COUNT(*) AS total_events, MIN(event_date) AS min_date, MAX(event_date) AS max_date FROM storm_crimes;
+SELECT COUNT(*) AS total_events FROM storm_crimes;
+SELECT MIN(event_date) AS min_date, MAX(event_date) AS max_date FROM storm_crimes;
 
--- View: label Storm vs No Storm
+-- View: flag Storm vs No Storm
 DROP VIEW IF EXISTS v_events_with_flag;
 CREATE VIEW v_events_with_flag AS
 SELECT
@@ -16,7 +17,7 @@ SELECT
   city, zone
 FROM storm_crimes;
 
--- Crime type counts overall and during storms
+-- Crime type counts by storm_flag (from storm_crimes)
 SELECT
   crime_activity,
   CASE WHEN TRIM(IFNULL(storm_activity,'')) = '' THEN 'No Storm' ELSE 'Storm' END AS storm_flag,
@@ -25,7 +26,7 @@ FROM storm_crimes
 GROUP BY crime_activity, storm_flag
 ORDER BY storm_flag, n_events DESC;
 
--- Top N crime types during Storm periods
+-- Top 25 crime types during Storm periods
 SELECT crime_activity, COUNT(*) AS n_events
 FROM storm_crimes
 WHERE TRIM(IFNULL(storm_activity,'')) <> ''
@@ -33,7 +34,7 @@ GROUP BY crime_activity
 ORDER BY n_events DESC
 LIMIT 25;
 
--- Monthly counts by storm_flag (materialize)
+-- Monthly counts derived from storm_crimes
 DROP TABLE IF EXISTS monthly_crime_counts_temp;
 CREATE TABLE monthly_crime_counts_temp AS
 SELECT
